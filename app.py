@@ -142,6 +142,19 @@ if "df" not in st.session_state:
 # ------------------------
 st.sidebar.header("Filters & Actions")
 
+# GitHub設定状況の表示
+st.sidebar.subheader("GitHub設定状況")
+repo_name, branch, path = gh_params()
+client = get_github_client()
+
+if client and repo_name:
+    st.sidebar.success(f"✅ GitHub接続: {repo_name}")
+    st.sidebar.success(f"✅ ブランチ: {branch}")
+    st.sidebar.success(f"✅ ファイル: {path}")
+else:
+    st.sidebar.warning("⚠️ GitHub接続が設定されていません")
+    st.sidebar.info("GitHubに保存するには、.streamlit/secrets.tomlでGITHUB_TOKENを設定してください")
+
 # 動的にフィルタ列を生成
 if not st.session_state.df.empty:
     filter_columns = st.session_state.df.columns.tolist()
