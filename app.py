@@ -41,22 +41,35 @@ def get_github_client():
 # ------------------------
 
 def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None:
+    if df is None or df.empty:
         return pd.DataFrame()
 
-    # 元の列構造を保持し、基本的なクリーニングのみ行う
-    # 小文字・トリム
-    norm = {c: str(c).strip() for c in df.columns}
-    df = df.rename(columns=norm)
-    
-    # 数値列を数値化（可能な列のみ）
-    for col in df.columns:
-        try:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        except:
-            pass  # 数値化できない列はそのまま
-    
-    return df
+    try:
+        # 元の列構造を保持し、基本的なクリーニングのみ行う
+        # 小文字・トリム
+        norm = {c: str(c).strip() for c in df.columns}
+        df = df.rename(columns=norm)
+        
+        # 数値列を数値化（可能な列のみ）
+        for col in df.columns:
+            try:
+                # 空文字列やNaNを適切に処理
+                if df[col].dtype == 'object':
+                    # 空文字列をNaNに変換
+                    df[col] = df[col].replace('', pd.NA)
+                    # 数値化を試行
+                    numeric_values = pd.to_numeric(df[col], errors='coerce')
+                    # 数値化できた列のみ更新
+                    if not numeric_values.isna().all():
+                        df[col] = numeric_values
+            except Exception:
+                # 数値化できない列はそのまま
+                pass
+        
+        return df
+    except Exception as e:
+        st.error(f"データの正規化でエラーが発生しました: {e}")
+        return df  # エラーが発生した場合は元のデータを返す
 
 
 def load_csv_from_github() -> pd.DataFrame:
@@ -134,50 +147,80 @@ if uploaded is not None:
 # ------------------------
 view = st.session_state.df.copy()
 if not st.session_state.df.empty and 'filter_values' in locals():
-    for col, filter_value in filter_values.items():
-        if filter_value:
-            view = view[view[col].astype(str).str.contains(filter_value, case=False, na=False)]
+    try:
+        for col, filter_value in filter_values.items():
+            if filter_value and col in view.columns:
+                # 安全なフィルタリング
+                try:
+                    view = view[view[col].astype(str).str.contains(filter_value, case=False, na=False)]
+                except Exception:
+                    # フィルタリングに失敗した場合はその列をスキップ
+                    st.warning(f"列 '{col}' のフィルタリングに失敗しました")
+    except Exception as e:
+        st.error(f"フィルタの適用でエラーが発生しました: {e}")
 
 # ------------------------
 # 表示・編集
 # ------------------------
 st.subheader("テーブル編集")
 
-# 列の設定を動的に生成
+# 列の設定を動的に生成（安全な方法）
 column_config = {}
 if not view.empty:
     for col in view.columns:
-        if pd.api.types.is_numeric_dtype(view[col]):
-            column_config[col] = st.column_config.NumberColumn(col, step=0.0001, format="%.4f")
-        else:
+        try:
+            if pd.api.types.is_numeric_dtype(view[col]):
+                column_config[col] = st.column_config.NumberColumn(col, step=0.0001, format="%.4f")
+            else:
+                column_config[col] = st.column_config.TextColumn(col)
+        except Exception:
+            # エラーが発生した場合はデフォルトのTextColumnを使用
             column_config[col] = st.column_config.TextColumn(col)
 
-edited = st.data_editor(
-    view,
-    num_rows="dynamic",
-    use_container_width=True,
-    column_config=column_config,
-    hide_index=True,
-)
+# データエディターの設定を安全にする
+try:
+    edited = st.data_editor(
+        view,
+        num_rows="dynamic",
+        use_container_width=True,
+        column_config=column_config,
+        hide_index=True,
+    )
+except Exception as e:
+    st.error(f"データエディターの表示でエラーが発生しました: {e}")
+    st.write("元のデータを表示します:")
+    st.dataframe(view, use_container_width=True)
+    edited = view  # 編集できない場合は元のデータを使用
 
 # 編集内容を元データへ反映
-if not view.empty:
-    f_reset = view.reset_index()
-    e_reset = edited.reset_index(drop=True)
-    base = st.session_state.df.copy()
+if not view.empty and 'edited' in locals():
+    try:
+        f_reset = view.reset_index()
+        e_reset = edited.reset_index(drop=True)
+        base = st.session_state.df.copy()
 
-    for i in range(min(len(f_reset), len(e_reset))):
-        orig_idx = f_reset.loc[i, "index"]
-        for col in view.columns:
-            if col in base.columns:
-                base.loc[orig_idx, col] = e_reset.loc[i, col]
+        for i in range(min(len(f_reset), len(e_reset))):
+            orig_idx = f_reset.loc[i, "index"]
+            for col in view.columns:
+                if col in base.columns:
+                    try:
+                        base.loc[orig_idx, col] = e_reset.loc[i, col]
+                    except Exception:
+                        # 個別のセルの更新に失敗した場合はスキップ
+                        pass
 
-    # 追加行
-    if len(e_reset) > len(f_reset):
-        new_rows = e_reset.iloc[len(f_reset):]
-        base = pd.concat([base, new_rows], ignore_index=True)
+        # 追加行
+        if len(e_reset) > len(f_reset):
+            try:
+                new_rows = e_reset.iloc[len(f_reset):]
+                base = pd.concat([base, new_rows], ignore_index=True)
+            except Exception as e:
+                st.warning(f"新規行の追加に失敗しました: {e}")
 
-    st.session_state.df = normalize_columns(base)
+        st.session_state.df = normalize_columns(base)
+    except Exception as e:
+        st.error(f"編集内容の反映でエラーが発生しました: {e}")
+        st.warning("編集内容が保存されませんでした。元のデータを維持します。")
 
 # ------------------------
 # 行削除（インデックス指定）
