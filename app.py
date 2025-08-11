@@ -1,159 +1,44 @@
 import os
-import io
-import base64
-from typing import Tuple
-
 import pandas as pd
 import streamlit as st
+import base64
 
 st.set_page_config(page_title="Materials CSV Editor", layout="wide")
 st.title("Materials CSV Editor")
 
-# 元のCSVの列構造を保持するため、EXPECTED_COLUMNSの制限を削除
-# EXPECTED_COLUMNS = ["category", "name", "lambda", "density", "notes"]
-# NUMERIC_COLUMNS = ["lambda", "density"]
-
-# ------------------------
-# GitHub クライアント
-# ------------------------
-try:
-    from github import Github  # PyGithub
-    GITHUB_AVAILABLE = True
-except Exception:
-    GITHUB_AVAILABLE = False
-
-
-def gh_params() -> Tuple[str, str, str]:
-    repo = st.secrets.get("GH_REPO")
-    branch = st.secrets.get("GH_BRANCH", "main")
-    path = st.secrets.get("GH_FILE_PATH", "material_db.csv")
-    return repo, branch, path
-
-
-def get_github_client():
-    token = st.secrets.get("GITHUB_TOKEN")
-    if not token or not GITHUB_AVAILABLE:
-        return None
-    return Github(token)
-
-# ------------------------
-# CSV I/O
-# ------------------------
-
-def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty:
+# ====== CSV I/O ======
+def load_csv() -> pd.DataFrame:
+    """ローカルCSVファイルを読み込み"""
+    try:
+        if os.path.exists("material_db.csv"):
+            return pd.read_csv("material_db.csv")
+        else:
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"CSVファイルの読み込みに失敗しました: {e}")
         return pd.DataFrame()
 
+def save_csv(df: pd.DataFrame) -> bool:
+    """ローカルCSVファイルに保存"""
     try:
-        # 元の列構造を保持し、基本的なクリーニングのみ行う
-        # 小文字・トリム
-        norm = {c: str(c).strip() for c in df.columns}
-        df = df.rename(columns=norm)
-        
-        # 各列のデータ型を適切に処理
-        for col in df.columns:
-            try:
-                # 空文字列やNaNを適切に処理
-                if df[col].dtype == 'object':
-                    # 空文字列をNaNに変換
-                    df[col] = df[col].replace('', pd.NA)
-                    
-                    # ブール型の可能性をチェック
-                    unique_values = df[col].dropna().unique()
-                    if len(unique_values) <= 2:
-                        # True/False、1/0、'true'/'false'などの値をチェック
-                        bool_values = set()
-                        for val in unique_values:
-                            if isinstance(val, str):
-                                val_lower = str(val).lower()
-                                if val_lower in ['true', 'false', '1', '0', 'yes', 'no']:
-                                    bool_values.add(val)
-                        
-                        if len(bool_values) >= 2:
-                            # ブール型として処理
-                            df[col] = df[col].map({
-                                'true': True, 'True': True, '1': True, 'yes': True, 'Yes': True,
-                                'false': False, 'False': False, '0': False, 'no': False, 'No': False
-                            }).fillna(df[col])
-                            continue
-                    
-                    # 数値化を試行
-                    numeric_values = pd.to_numeric(df[col], errors='coerce')
-                    # 数値化できた列のみ更新
-                    if not numeric_values.isna().all():
-                        df[col] = numeric_values
-                        
-            except Exception:
-                # 個別の列の処理に失敗した場合はそのまま
-                pass
-        
-        return df
-    except Exception as e:
-        st.error(f"データの正規化でエラーが発生しました: {e}")
-        return df  # エラーが発生した場合は元のデータを返す
-
-
-def load_csv_from_github() -> pd.DataFrame:
-    repo_name, branch, path = gh_params()
-    client = get_github_client()
-    if client and repo_name:
-        repo = client.get_repo(repo_name)
-        file = repo.get_contents(path, ref=branch)
-        content = base64.b64decode(file.content)
-        return pd.read_csv(io.BytesIO(content))
-    # ローカルフォールバック
-    if os.path.exists("material_db.csv"):
-        return pd.read_csv("material_db.csv")
-    return pd.DataFrame()
-
-
-def save_csv_to_github(df: pd.DataFrame, message: str = "update material_db.csv") -> bool:
-    repo_name, branch, path = gh_params()
-    client = get_github_client()
-    csv_bytes = df.to_csv(index=False).encode("utf-8")
-
-    if client and repo_name:
-        repo = client.get_repo(repo_name)
-        try:
-            contents = repo.get_contents(path, ref=branch)
-            repo.update_file(path, message, csv_bytes, contents.sha, branch=branch)
-        except Exception:
-            repo.create_file(path, message, csv_bytes, branch=branch)
+        df.to_csv("material_db.csv", index=False)
         return True
-    # ローカル保存（開発用）
-    with open("material_db.csv", "wb") as f:
-        f.write(csv_bytes)
-    return True
-
+    except Exception as e:
+        st.error(f"CSVファイルの保存に失敗しました: {e}")
+        return False
 
 def make_download_link(df: pd.DataFrame, filename: str = "material_db.csv") -> str:
-    b = df.to_csv(index=False).encode("utf-8")
-    b64 = base64.b64encode(b).decode()
+    """ダウンロードリンクを生成"""
+    csv = df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
     return f'<a download="{filename}" href="data:text/csv;base64,{b64}">Download CSV</a>'
 
-# ------------------------
-# 初期ロード
-# ------------------------
+# ====== 初期ロード ======
 if "df" not in st.session_state:
-    st.session_state.df = normalize_columns(load_csv_from_github())
+    st.session_state.df = load_csv()
 
-# ------------------------
-# サイドバー（フィルタ & インポート）
-# ------------------------
+# ====== サイドバー（フィルタ & インポート） ======
 st.sidebar.header("Filters & Actions")
-
-# GitHub設定状況の表示
-st.sidebar.subheader("GitHub設定状況")
-repo_name, branch, path = gh_params()
-client = get_github_client()
-
-if client and repo_name:
-    st.sidebar.success(f"✅ GitHub接続: {repo_name}")
-    st.sidebar.success(f"✅ ブランチ: {branch}")
-    st.sidebar.success(f"✅ ファイル: {path}")
-else:
-    st.sidebar.warning("⚠️ GitHub接続が設定されていません")
-    st.sidebar.info("GitHubに保存するには、.streamlit/secrets.tomlでGITHUB_TOKENを設定してください")
 
 # 動的にフィルタ列を生成
 if not st.session_state.df.empty:
@@ -168,17 +53,13 @@ uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"], accept_multiple_
 if uploaded is not None:
     try:
         imp = pd.read_csv(uploaded)
-        imp = normalize_columns(imp)
-        
         # 既存データとマージ（全列を保持）
         st.session_state.df = pd.concat([st.session_state.df, imp], ignore_index=True).drop_duplicates()
         st.sidebar.success("CSV をマージしました。")
     except Exception as e:
         st.sidebar.error(f"インポート失敗: {e}")
 
-# ------------------------
-# フィルタ適用
-# ------------------------
+# ====== フィルタ適用 ======
 view = st.session_state.df.copy()
 if not st.session_state.df.empty and 'filter_values' in locals():
     try:
@@ -193,9 +74,7 @@ if not st.session_state.df.empty and 'filter_values' in locals():
     except Exception as e:
         st.error(f"フィルタの適用でエラーが発生しました: {e}")
 
-# ------------------------
-# 表示・編集
-# ------------------------
+# ====== 表示・編集 ======
 st.subheader("テーブル編集")
 
 # 列の設定を動的に生成（安全な方法）
@@ -237,7 +116,7 @@ except Exception as e:
     st.dataframe(view, use_container_width=True)
     edited = view  # 編集できない場合は元のデータを使用
 
-# 編集内容を元データへ反映
+# ====== 編集内容を元データへ反映 ======
 if not view.empty and 'edited' in locals():
     try:
         f_reset = view.reset_index()
@@ -262,14 +141,12 @@ if not view.empty and 'edited' in locals():
             except Exception as e:
                 st.warning(f"新規行の追加に失敗しました: {e}")
 
-        st.session_state.df = normalize_columns(base)
+        st.session_state.df = base
     except Exception as e:
         st.error(f"編集内容の反映でエラーが発生しました: {e}")
         st.warning("編集内容が保存されませんでした。元のデータを維持します。")
 
-# ------------------------
-# 行削除（インデックス指定）
-# ------------------------
+# ====== 行削除（インデックス指定） ======
 with st.expander("行削除（フィルタ後の表示インデックスで指定）"):
     idx_text = st.text_input("削除する行番号（例: 0,2,5-7）", "")
     if st.button("指定行を削除", type="primary"):
@@ -292,18 +169,16 @@ with st.expander("行削除（フィルタ後の表示インデックスで指�
         except Exception as e:
             st.error(f"削除失敗: {e}")
 
-# ------------------------
-# 保存 & ダウンロード
-# ------------------------
+# ====== 保存 & ダウンロード ======
 col1, col2 = st.columns(2)
 with col1:
-    if st.button("GitHub に保存（コミット）", type="primary"):
-        ok = save_csv_to_github(st.session_state.df)
+    if st.button("ローカルに保存", type="primary"):
+        ok = save_csv(st.session_state.df)
         if ok:
-            st.success("保存しました（GitHub またはローカル）。")
+            st.success("ローカルファイルに保存しました。")
         else:
             st.error("保存に失敗しました。")
 with col2:
     st.markdown(make_download_link(st.session_state.df), unsafe_allow_html=True)
 
-st.caption("※ 『GitHub に保存』を押した時点で永続化。セッション内の変更は自動保存されません。")
+st.caption("※ 『ローカルに保存』を押した時点で永続化。セッション内の変更は自動保存されません。")
