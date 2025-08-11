@@ -50,20 +50,41 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
         norm = {c: str(c).strip() for c in df.columns}
         df = df.rename(columns=norm)
         
-        # 数値列を数値化（可能な列のみ）
+        # 各列のデータ型を適切に処理
         for col in df.columns:
             try:
                 # 空文字列やNaNを適切に処理
                 if df[col].dtype == 'object':
                     # 空文字列をNaNに変換
                     df[col] = df[col].replace('', pd.NA)
+                    
+                    # ブール型の可能性をチェック
+                    unique_values = df[col].dropna().unique()
+                    if len(unique_values) <= 2:
+                        # True/False、1/0、'true'/'false'などの値をチェック
+                        bool_values = set()
+                        for val in unique_values:
+                            if isinstance(val, str):
+                                val_lower = str(val).lower()
+                                if val_lower in ['true', 'false', '1', '0', 'yes', 'no']:
+                                    bool_values.add(val)
+                        
+                        if len(bool_values) >= 2:
+                            # ブール型として処理
+                            df[col] = df[col].map({
+                                'true': True, 'True': True, '1': True, 'yes': True, 'Yes': True,
+                                'false': False, 'False': False, '0': False, 'no': False, 'No': False
+                            }).fillna(df[col])
+                            continue
+                    
                     # 数値化を試行
                     numeric_values = pd.to_numeric(df[col], errors='coerce')
                     # 数値化できた列のみ更新
                     if not numeric_values.isna().all():
                         df[col] = numeric_values
+                        
             except Exception:
-                # 数値化できない列はそのまま
+                # 個別の列の処理に失敗した場合はそのまま
                 pass
         
         return df
@@ -169,9 +190,20 @@ column_config = {}
 if not view.empty:
     for col in view.columns:
         try:
-            if pd.api.types.is_numeric_dtype(view[col]):
+            # データ型を適切に判定
+            col_dtype = view[col].dtype
+            
+            if pd.api.types.is_bool_dtype(col_dtype):
+                # ブール型の場合はCheckboxColumnを使用
+                column_config[col] = st.column_config.CheckboxColumn(col)
+            elif pd.api.types.is_numeric_dtype(col_dtype):
+                # 数値型の場合はNumberColumnを使用
                 column_config[col] = st.column_config.NumberColumn(col, step=0.0001, format="%.4f")
+            elif pd.api.types.is_datetime64_dtype(col_dtype):
+                # 日時型の場合はDateColumnを使用
+                column_config[col] = st.column_config.DatetimeColumn(col)
             else:
+                # その他の場合はTextColumnを使用
                 column_config[col] = st.column_config.TextColumn(col)
         except Exception:
             # エラーが発生した場合はデフォルトのTextColumnを使用
