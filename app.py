@@ -1,184 +1,201 @@
-import os
+import io
+import json
 import pandas as pd
 import streamlit as st
-import base64
 
-st.set_page_config(page_title="Materials CSV Editor", layout="wide")
-st.title("Materials CSV Editor")
+st.set_page_config(page_title="U-Value Calc (Python/Streamlit)", layout="wide")
+st.title("U-Value Calc (Python/Streamlit)")
 
-# ====== CSV I/O ======
-def load_csv() -> pd.DataFrame:
-    """ローカルCSVファイルを読み込み"""
-    try:
-        if os.path.exists("material_db.csv"):
-            return pd.read_csv("material_db.csv")
-        else:
-            return pd.DataFrame()
-    except Exception as e:
-        st.error(f"CSVファイルの読み込みに失敗しました: {e}")
-        return pd.DataFrame()
+# ====== 設定 ======
+DEFAULT_RSI = 0.11   # 室内表面熱伝達抵抗 [m²K/W]（例値）
+DEFAULT_RSE = 0.04   # 室外表面熱伝達抵抗 [m²K/W]（例値）
+DEFAULT_TB_RATIO = 0.17  # 熱橋部面積比（例: 17%）
 
-def save_csv(df: pd.DataFrame) -> bool:
-    """ローカルCSVファイルに保存"""
-    try:
-        df.to_csv("material_db.csv", index=False)
-        return True
-    except Exception as e:
-        st.error(f"CSVファイルの保存に失敗しました: {e}")
-        return False
-
-def make_download_link(df: pd.DataFrame, filename: str = "material_db.csv") -> str:
-    """ダウンロードリンクを生成"""
-    csv = df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a download="{filename}" href="data:text/csv;base64,{b64}">Download CSV</a>'
-
-# ====== 初期ロード ======
-if "df" not in st.session_state:
-    st.session_state.df = load_csv()
-
-# ====== サイドバー（フィルタ & インポート） ======
-st.sidebar.header("Filters & Actions")
-
-# 動的にフィルタ列を生成
-if not st.session_state.df.empty:
-    filter_columns = st.session_state.df.columns.tolist()
-    filter_values = {}
-    
-    for col in filter_columns[:5]:  # 最初の5列のみフィルタ表示
-        filter_values[col] = st.sidebar.text_input(f"{col} contains", "")
-
-st.sidebar.subheader("CSV import (merge)")
-uploaded = st.sidebar.file_uploader("Upload CSV", type=["csv"], accept_multiple_files=False)
-if uploaded is not None:
-    try:
-        imp = pd.read_csv(uploaded)
-        # 既存データとマージ（全列を保持）
-        st.session_state.df = pd.concat([st.session_state.df, imp], ignore_index=True).drop_duplicates()
-        st.sidebar.success("CSV をマージしました。")
-    except Exception as e:
-        st.sidebar.error(f"インポート失敗: {e}")
-
-# ====== フィルタ適用 ======
-view = st.session_state.df.copy()
-if not st.session_state.df.empty and 'filter_values' in locals():
-    try:
-        for col, filter_value in filter_values.items():
-            if filter_value and col in view.columns:
-                # 安全なフィルタリング
-                try:
-                    view = view[view[col].astype(str).str.contains(filter_value, case=False, na=False)]
-                except Exception:
-                    # フィルタリングに失敗した場合はその列をスキップ
-                    st.warning(f"列 '{col}' のフィルタリングに失敗しました")
-    except Exception as e:
-        st.error(f"フィルタの適用でエラーが発生しました: {e}")
-
-# ====== 表示・編集 ======
-st.subheader("テーブル編集")
-
-# 列の設定を動的に生成（安全な方法）
-column_config = {}
-if not view.empty:
-    for col in view.columns:
+# ====== 材料DBの読み込み ======
+@st.cache_data
+def load_materials(file_bytes: bytes | None) -> pd.DataFrame:
+    if file_bytes:
+        df = pd.read_csv(io.BytesIO(file_bytes))
+    else:
         try:
-            # データ型を適切に判定
-            col_dtype = view[col].dtype
-            
-            if pd.api.types.is_bool_dtype(col_dtype):
-                # ブール型の場合はCheckboxColumnを使用
-                column_config[col] = st.column_config.CheckboxColumn(col)
-            elif pd.api.types.is_numeric_dtype(col_dtype):
-                # 数値型の場合はNumberColumnを使用
-                column_config[col] = st.column_config.NumberColumn(col, step=0.0001, format="%.4f")
-            elif pd.api.types.is_datetime64_dtype(col_dtype):
-                # 日時型の場合はDateColumnを使用
-                column_config[col] = st.column_config.DatetimeColumn(col)
-            else:
-                # その他の場合はTextColumnを使用
-                column_config[col] = st.column_config.TextColumn(col)
+            df = pd.read_csv("material_db.csv")
         except Exception:
-            # エラーが発生した場合はデフォルトのTextColumnを使用
-            column_config[col] = st.column_config.TextColumn(col)
+            df = pd.DataFrame(columns=["category","name","lambda","density","notes"])
+    # 列名正規化
+    df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
+    if "lambda" not in df.columns:
+        # 同義語対応
+        for alt in ["λ","valuea","lambda(w/mk)"]:
+            if alt in df.columns:
+                df["lambda"] = df[alt]
+                break
+    # 必須列を確保
+    for c in ["category","name","lambda"]:
+        if c not in df.columns:
+            df[c] = ""
+    # 数値化
+    df["lambda"] = pd.to_numeric(df["lambda"], errors="coerce")
+    return df[["category","name","lambda"]].dropna(subset=["name","lambda"]).reset_index(drop=True)
 
-# データエディターの設定を安全にする
-try:
-    edited = st.data_editor(
-        view,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config=column_config,
-        hide_index=True,
-    )
-except Exception as e:
-    st.error(f"データエディターの表示でエラーが発生しました: {e}")
-    st.write("元のデータを表示します:")
-    st.dataframe(view, use_container_width=True)
-    edited = view  # 編集できない場合は元のデータを使用
+# ====== λ検索ユーティリティ ======
+def lookup_lambda(materials: pd.DataFrame, category: str, name: str) -> float | None:
+    if not name:
+        return None
+    df = materials
+    if category:
+        df = df[df["category"].astype(str) == str(category)]
+    df = df[df["name"].astype(str) == str(name)]
+    if df.empty:
+        # カテゴリ不一致のときは名前だけで再検索
+        df = materials[materials["name"].astype(str) == str(name)]
+    if df.empty:
+        return None
+    return float(df.iloc[0]["lambda"])
 
-# ====== 編集内容を元データへ反映 ======
-if not view.empty and 'edited' in locals():
-    try:
-        f_reset = view.reset_index()
-        e_reset = edited.reset_index(drop=True)
-        base = st.session_state.df.copy()
+# ====== R, U 計算 ======
+def layer_R(thickness_mm: float, lam: float | None) -> float:
+    """層抵抗 R = 厚み/λ（厚み[m]）"""
+    if lam is None or lam <= 0:
+        return 0.0
+    t_m = max(0.0, (thickness_mm or 0) / 1000.0)
+    return t_m / lam
 
-        for i in range(min(len(f_reset), len(e_reset))):
-            orig_idx = f_reset.loc[i, "index"]
-            for col in view.columns:
-                if col in base.columns:
-                    try:
-                        base.loc[orig_idx, col] = e_reset.loc[i, col]
-                    except Exception:
-                        # 個別のセルの更新に失敗した場合はスキップ
-                        pass
+def u_from_Rsum(Rsi: float, R_layers_sum: float, Rse: float) -> float:
+    R_total = max(1e-9, Rsi + R_layers_sum + Rse)
+    return 1.0 / R_total
 
-        # 追加行
-        if len(e_reset) > len(f_reset):
-            try:
-                new_rows = e_reset.iloc[len(f_reset):]
-                base = pd.concat([base, new_rows], ignore_index=True)
-            except Exception as e:
-                st.warning(f"新規行の追加に失敗しました: {e}")
+def calc_results(layers: pd.DataFrame, materials: pd.DataFrame, Rsi: float, Rse: float, tb_ratio: float):
+    """一般部・熱橋部それぞれのUを計算し、面積比で加重平均"""
+    # 一般部
+    Rsum_norm = 0.0
+    for _, r in layers.iterrows():
+        lam = lookup_lambda(materials, r["cat_normal"], r["mat_normal"])
+        Rsum_norm += layer_R(r["thickness_mm"], lam)
+    U_norm = u_from_Rsum(Rsi, Rsum_norm, Rse)
 
-        st.session_state.df = base
-    except Exception as e:
-        st.error(f"編集内容の反映でエラーが発生しました: {e}")
-        st.warning("編集内容が保存されませんでした。元のデータを維持します。")
+    # 熱橋部（未設定の層は一般部と同じ素材として扱う）
+    Rsum_tb = 0.0
+    for _, r in layers.iterrows():
+        name_b = r.get("mat_bridge") or r.get("mat_normal")
+        cat_b  = r.get("cat_bridge") or r.get("cat_normal")
+        lam_b = lookup_lambda(materials, cat_b, name_b)
+        Rsum_tb += layer_R(r["thickness_mm"], lam_b)
+    U_tb = u_from_Rsum(Rsi, Rsum_tb, Rse)
 
-# ====== 行削除（インデックス指定） ======
-with st.expander("行削除（フィルタ後の表示インデックスで指定）"):
-    idx_text = st.text_input("削除する行番号（例: 0,2,5-7）", "")
-    if st.button("指定行を削除", type="primary"):
+    # 面積比で合成
+    a_tb = max(0.0, min(1.0, tb_ratio))
+    U_total = (1.0 - a_tb) * U_norm + a_tb * U_tb
+
+    return {
+        "Rsum_norm": Rsum_norm,
+        "Rsum_tb": Rsum_tb,
+        "U_norm": U_norm,
+        "U_tb": U_tb,
+        "U_total": U_total
+    }
+
+# ====== サイドバー：材料DB & 基本設定 ======
+st.sidebar.header("1) Materials DB / 基本設定")
+uploaded_db = st.sidebar.file_uploader("material_db.csv をアップロード（任意）", type=["csv"])
+materials = load_materials(uploaded_db.read() if uploaded_db else None)
+
+st.sidebar.caption(f"材料点数: {len(materials)}")
+Rsi = st.sidebar.number_input("Rsi 室内表面抵抗 [m²K/W]", value=DEFAULT_RSI, step=0.01, format="%.2f")
+Rse = st.sidebar.number_input("Rse 室外表面抵抗 [m²K/W]", value=DEFAULT_RSE, step=0.01, format="%.2f")
+tb_ratio = st.sidebar.number_input("熱橋部面積比 (0〜1)", value=DEFAULT_TB_RATIO, min_value=0.0, max_value=1.0, step=0.01, format="%.2f")
+
+# ====== 層データ（DataFrameベースUI） ======
+st.header("2) 層構成（厚みは両部共通）")
+st.caption("各レイヤーで『一般部用Material』『熱橋部用Material』を別々に選べます（未指定時は一般部と同じ）。")
+
+# 候補リスト（カテゴリ→材料名）
+cat_options = [""] + sorted(materials["category"].dropna().astype(str).unique().tolist())
+def names_for(cat: str) -> list[str]:
+    if not cat:
+        return sorted(materials["name"].dropna().astype(str).unique().tolist())
+    return sorted(materials.loc[materials["category"].astype(str)==str(cat), "name"].dropna().astype(str).unique().tolist())
+
+# 初期層（例）
+if "layers_df" not in st.session_state:
+    st.session_state.layers_df = pd.DataFrame([
+        {"order":1, "thickness_mm":12.5, "cat_normal":"仕上げ", "mat_normal":"石膏ボード12.5", "cat_bridge":"", "mat_bridge":""},
+        {"order":2, "thickness_mm":105,  "cat_normal":"断熱材", "mat_normal":"グラスウール16K", "cat_bridge":"", "mat_bridge":""},
+        {"order":3, "thickness_mm":9,    "cat_normal":"木質系", "mat_normal":"構造用合板",     "cat_bridge":"", "mat_bridge":""},
+    ])
+
+# data_editor の列設定
+def colcfg_text(label): return st.column_config.TextColumn(label)
+def colcfg_num(label, step=0.5, fmt="%.1f"): return st.column_config.NumberColumn(label, step=step, format=fmt)
+
+layers_view = st.data_editor(
+    st.session_state.layers_df,
+    use_container_width=True,
+    num_rows="dynamic",
+    column_config={
+        "order": colcfg_num("order", step=1, fmt="%.0f"),
+        "thickness_mm": colcfg_num("thickness_mm [mm]", step=0.5, fmt="%.1f"),
+        "cat_normal": colcfg_text("cat_normal"),
+        "mat_normal": colcfg_text("mat_normal"),
+        "cat_bridge": colcfg_text("cat_bridge"),
+        "mat_bridge": colcfg_text("mat_bridge"),
+    },
+    hide_index=True
+)
+
+# 入力補助（カテゴリ選択→材料候補を提示）
+with st.expander("素材候補ヘルプ（カテゴリ→材料名）", expanded=False):
+    colA, colB = st.columns(2)
+    with colA:
+        sel_cat = st.selectbox("カテゴリを選択", cat_options, index=0)
+    with colB:
+        st.write("材料候補（クリックでコピー→セルに貼付）")
+        st.write(names_for(sel_cat)[:100])
+
+# 編集反映・並び替え
+layers_clean = layers_view.copy()
+layers_clean["order"] = pd.to_numeric(layers_clean["order"], errors="coerce").fillna(0).astype(int)
+layers_clean = layers_clean.sort_values("order").reset_index(drop=True)
+st.session_state.layers_df = layers_clean
+
+# ====== 計算 ======
+if layers_clean.empty:
+    st.warning("レイヤーを1つ以上追加してください。")
+else:
+    res = calc_results(layers_clean, materials, Rsi, Rse, tb_ratio)
+
+    st.header("3) 計算結果")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("U 一般部 [W/m²K]", f"{res['U_norm']:.3f}")
+    with col2:
+        st.metric("U 熱橋部 [W/m²K]", f"{res['U_tb']:.3f}")
+    with col3:
+        st.metric("U 合成（面積比適用） [W/m²K]", f"{res['U_total']:.3f}")
+
+    with st.expander("詳細（R の内訳）", expanded=False):
+        st.write(f"Rsum 一般部（層合計）: **{res['Rsum_norm']:.3f} m²K/W**")
+        st.write(f"Rsum 熱橋部（層合計）: **{res['Rsum_tb']:.3f} m²K/W**")
+        st.write(f"Rsi: {Rsi:.2f} / Rse: {Rse:.2f}")
+        st.write(f"熱橋部面積比: {tb_ratio:.2f}")
+
+# ====== 保存/読み込み（JSON） ======
+st.header("4) 設定の保存/読み込み（JSON）")
+colS, colL = st.columns(2)
+with colS:
+    proj = {
+        "Rsi": Rsi, "Rse": Rse, "thermalBridgeRatio": tb_ratio,
+        "layers": st.session_state.layers_df.to_dict(orient="records")
+    }
+    j = json.dumps(proj, ensure_ascii=False, indent=2)
+    st.download_button("プロジェクトをダウンロード（JSON）", j, file_name="uvalue_project.json", mime="application/json")
+with colL:
+    up = st.file_uploader("プロジェクトを読み込み（JSON）", type=["json"], key="projup")
+    if up is not None:
         try:
-            target = set()
-            for part in idx_text.split(','):
-                part = part.strip()
-                if not part:
-                    continue
-                if '-' in part:
-                    a, b = part.split('-', 1)
-                    a, b = int(a), int(b)
-                    target |= set(range(min(a, b), max(a, b) + 1))
-                else:
-                    target.add(int(part))
-            if not view.empty:
-                base_idx = f_reset.iloc[list(target)]["index"].tolist()
-                st.session_state.df = st.session_state.df.drop(index=base_idx).reset_index(drop=True)
-                st.success(f"{len(base_idx)} 行を削除しました。")
+            data = json.loads(up.read().decode("utf-8"))
+            st.session_state.layers_df = pd.DataFrame(data.get("layers", []))
+            st.session_state.layers_df = st.session_state.layers_df[["order","thickness_mm","cat_normal","mat_normal","cat_bridge","mat_bridge"]]
+            st.session_state.layers_df["order"] = pd.to_numeric(st.session_state.layers_df["order"], errors="coerce").fillna(0).astype(int)
+            st.experimental_rerun()
         except Exception as e:
-            st.error(f"削除失敗: {e}")
-
-# ====== 保存 & ダウンロード ======
-col1, col2 = st.columns(2)
-with col1:
-    if st.button("ローカルに保存", type="primary"):
-        ok = save_csv(st.session_state.df)
-        if ok:
-            st.success("ローカルファイルに保存しました。")
-        else:
-            st.error("保存に失敗しました。")
-with col2:
-    st.markdown(make_download_link(st.session_state.df), unsafe_allow_html=True)
-
-st.caption("※ 『ローカルに保存』を押した時点で永続化。セッション内の変更は自動保存されません。")
+            st.error(f"読み込みに失敗しました: {e}")
