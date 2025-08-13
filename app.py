@@ -93,8 +93,7 @@ def load_materials(file_bytes: bytes | None) -> pd.DataFrame:
 
 # ====== サイドバー：入力 ======
 st.sidebar.header("データと検索条件")
-uploaded = st.sidebar.file_uploader("material_db.csv をアップロード（任意）", type=["csv"]) 
-materials = load_materials(uploaded.read() if uploaded else None)
+materials = load_materials(None)
 
 st.sidebar.caption(f"材料件数: {len(materials)}")
 
@@ -122,13 +121,3 @@ view = view.sort_values(by=sort_col, ascending=sort_asc, kind="mergesort").reset
 st.subheader("検索結果")
 st.caption("列：category / name / lambda (W/mK) / evidence / comment")
 st.dataframe(view[["category","name","lambda","evidence","comment"]], use_container_width=True, hide_index=True)
-
-selected_rows = st.experimental_data_editor(view[["category","name","lambda","evidence","comment"]], num_rows="dynamic", use_container_width=True, key="editor", disabled=True)
-selected_idx = st.session_state.get("editor_selected_rows", [])
-if selected_idx:
-    idx = selected_idx[0]
-    comment = view.iloc[idx]["comment"]
-    if isinstance(comment, str) and ("<" in comment and ">" in comment):
-        st.markdown(f"### コメント\n{comment}", unsafe_allow_html=True)
-    else:
-        st.markdown(f"### コメント\n{comment}")
