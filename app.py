@@ -10,149 +10,152 @@ st.title("Materials Search（シンプル版）")
 # ====== データ読み込み ======
 @st.cache_data
 def load_materials(file_bytes: bytes | None) -> pd.DataFrame:
-    if file_bytes:
-        _buf = io.BytesIO(file_bytes)
-        for enc in (None, "utf-8", "utf-8-sig", "cp932", "shift_jis", "latin1"):
+    try:
+        if file_bytes:
+            df = pd.read_csv(io.BytesIO(file_bytes))
+        else:
             try:
-                _buf.seek(0)
-                df = pd.read_csv(_buf, encoding=enc) if enc else pd.read_csv(_buf)
-                break
-            except Exception:
-                df = None
-        if df is None:
-            df = pd.DataFrame(columns=["category","name","lambda"])  # フォールバック
-    else:
-        df = None
-        for enc in (None, "utf-8", "utf-8-sig", "cp932", "shift_jis", "latin1"):
-            try:
-                df = pd.read_csv("material_db.csv", encoding=enc) if enc else pd.read_csv("material_db.csv")
-                break
+                df = pd.read_csv("material_db.csv")
             except Exception:
                 df = None
         if df is None:
             df = pd.DataFrame(columns=["category","name","lambda"])  # 空の雛形
-    # 列名を正規化
-    df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
-    # 重複列名にも対応して、最初に有効な値を返すSeriesを取得
-    def pick_series(dframe: pd.DataFrame, names: list[str]):
-        for n in names:
-            if n in dframe.columns:
-                # 同名の重複列をすべて取得して左から優先
-                sub = dframe.loc[:, dframe.columns == n]
-                if isinstance(sub, pd.DataFrame):
-                    if sub.shape[1] == 1:
-                        return sub.iloc[:, 0]
-                    # 行方向で左→右に値を補完して先頭列を採用
-                    return sub.bfill(axis=1).iloc[:, 0]
-                else:
-                    return dframe[n]
-        return None
-    # 同義列の吸収
-    # lambda
-    if "lambda" not in df.columns:
-        for alt in ["λ", "valuea", "lambda(w/mk)", "lam", "thermal_conductivity"]:
-            if alt in df.columns:
-                df["lambda"] = df[alt]
-                break
-    # name
-    if "name" not in df.columns:
-        for alt in ["material", "材料", "素材", "name_ja", "material_name", "品名", "名称"]:
-            if alt in df.columns:
-                df["name"] = df[alt]
-                break
-    # category
-    if "category" not in df.columns:
-        for alt in ["カテゴリ", "カテゴリー", "分類", "category_name", "group", "種別"]:
-            if alt in df.columns:
-                df["category"] = df[alt]
-                break
-    # evidence (standarda)
-    if "evidence" not in df.columns:
-        s = pick_series(df, ["standarda", "standard_a"])
-        if s is not None:
-            df["evidence"] = s
-    if "evidence" not in df.columns:
-        df["evidence"] = ""
-
-    # comment（優先: comment / comments / 備考 / 説明 / note / コメント）
-    if "comment" not in df.columns:
-        s = pick_series(df, ["comment", "comments", "備考", "説明", "note", "コメント"])
-        if s is not None:
-            df["comment"] = s
-    if "comment" not in df.columns:
-        df["comment"] = ""
-
-    # ドキュメント列（JSONリッチテキスト/HTML想定）を補助入力として扱う
-    doc_series = pick_series(df, ["ドキュメント", "document", "doc"]) or ""
-    df["document_raw"] = doc_series.astype(str) if hasattr(doc_series, "astype") else str(doc_series)
-
-    # ---- リッチテキスト → HTML 変換器 ----
-    def _autolink(text: str) -> str:
-        # URLを<a>化
-        return re.sub(r"(https?://[\w\-./%?#=&]+)", r"<a href='\1' target='_blank' rel='noopener'>\1</a>", text)
-
-    def rich_to_html(val: object) -> str:
-        if val is None or (isinstance(val, float) and pd.isna(val)):
-            return ""
-        s = str(val).strip()
-        if not s:
-            return ""
-        # Wix/Editor風 JSON（nodes を持つ）をテキスト化
-        if s.startswith("{") and '"nodes"' in s:
+        
+        # 列名を正規化
+        df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
+        
+        # 重複列名にも対応して、最初に有効な値を返すSeriesを取得
+        def pick_series(dframe: pd.DataFrame, names: list[str]):
             try:
-                import json as _json
-                doc = _json.loads(s)
-                parts = []
-                for node in doc.get("nodes", []):
-                    if isinstance(node, dict) and node.get("type") == "PARAGRAPH":
-                        texts = []
-                        for t in node.get("nodes", []):
-                            if isinstance(t, dict) and t.get("type") == "TEXT":
-                                td = t.get("textData", {})
-                                txt = td.get("text", "")
-                                url = None
-                                for d in td.get("decorations", []) or []:
-                                    if d.get("type") == "LINK":
-                                        url = d.get("linkData", {}).get("link", {}).get("url")
-                                if url:
-                                    texts.append(f"<a href='{html.escape(url)}' target='_blank' rel='noopener'>{html.escape(txt or url)}</a>")
-                                else:
-                                    texts.append(html.escape(txt))
-                        parts.append("<p>" + "".join(texts) + "</p>")
-                return "".join(parts)
+                for n in names:
+                    if n in dframe.columns:
+                        # 同名の重複列をすべて取得して左から優先
+                        sub = dframe.loc[:, dframe.columns == n]
+                        if isinstance(sub, pd.DataFrame):
+                            if sub.shape[1] == 1:
+                                return sub.iloc[:, 0]
+                            # 行方向で左→右に値を補完して先頭列を採用
+                            return sub.bfill(axis=1).iloc[:, 0]
+                        else:
+                            return dframe[n]
+                return None
             except Exception:
-                # JSONとして扱えなければ通常処理へフォールバック
-                pass
-        # 既にHTMLっぽいならそのまま
-        if "<" in s and ">" in s:
-            return s
-        # プレーンテキスト → エスケープ＆リンク化＆改行変換
-        s = html.escape(s)
-        s = _autolink(s)
-        return s.replace("\n", "<br>")
+                return None
+        
+        # 同義列の吸収
+        # lambda
+        if "lambda" not in df.columns:
+            for alt in ["λ", "valuea", "lambda(w/mk)", "lam", "thermal_conductivity"]:
+                if alt in df.columns:
+                    df["lambda"] = df[alt]
+                    break
+        # name
+        if "name" not in df.columns:
+            for alt in ["material", "材料", "素材", "name_ja", "material_name", "品名", "名称"]:
+                if alt in df.columns:
+                    df["name"] = df[alt]
+                    break
+        # category
+        if "category" not in df.columns:
+            for alt in ["カテゴリ", "カテゴリー", "分類", "category_name", "group", "種別"]:
+                if alt in df.columns:
+                    df["category"] = df[alt]
+                    break
+        # evidence (standarda)
+        if "evidence" not in df.columns:
+            s = pick_series(df, ["standarda", "standard_a"])
+            if s is not None:
+                df["evidence"] = s
+        if "evidence" not in df.columns:
+            df["evidence"] = ""
 
-    # コメント本文：commentが空ならdocument_rawを使う
-    base_text = df["comment"].astype(str)
-    needs_fallback = base_text.str.strip().eq("")
-    base_text = base_text.where(~needs_fallback, df["document_raw"])  # 空ならドキュメントで補完
+        # comment（優先: comment / comments / 備考 / 説明 / note / コメント）
+        if "comment" not in df.columns:
+            s = pick_series(df, ["comment", "comments", "備考", "説明", "note", "コメント"])
+            if s is not None:
+                df["comment"] = s
+        if "comment" not in df.columns:
+            df["comment"] = ""
 
-    # HTMLへ変換（以降、comment列はHTMLとして扱う）
-    df["comment"] = base_text.map(rich_to_html)
+        # ドキュメント列（JSONリッチテキスト/HTML想定）を補助入力として扱う
+        doc_series = pick_series(df, ["ドキュメント", "document", "doc"])
+        if doc_series is not None:
+            df["document_raw"] = doc_series.astype(str) if hasattr(doc_series, "astype") else str(doc_series)
+        else:
+            df["document_raw"] = ""
 
-    # 必須列の確保
-    for c in ["category","name","lambda","evidence","comment"]:
-        if c not in df.columns:
-            df[c] = ""
+        # ---- リッチテキスト → HTML 変換器 ----
+        def _autolink(text: str) -> str:
+            # URLを<a>化
+            return re.sub(r"(https?://[\w\-./%?#=&]+)", r"<a href='\1' target='_blank' rel='noopener'>\1</a>", text)
 
-    # 型整形
-    df["lambda"] = pd.to_numeric(df["lambda"], errors="coerce")
-    df["category"] = df["category"].astype(str)
-    df["name"] = df["name"].astype(str)
-    df["evidence"] = df["evidence"].astype(str)
-    # df["comment"] は既にHTML文字列
+        def rich_to_html(val: object) -> str:
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                return ""
+            s = str(val).strip()
+            if not s:
+                return ""
+            # Wix/Editor風 JSON（nodes を持つ）をテキスト化
+            if s.startswith("{") and '"nodes"' in s:
+                try:
+                    import json as _json
+                    doc = _json.loads(s)
+                    parts = []
+                    for node in doc.get("nodes", []):
+                        if isinstance(node, dict) and node.get("type") == "PARAGRAPH":
+                            texts = []
+                            for t in node.get("nodes", []):
+                                if isinstance(t, dict) and t.get("type") == "TEXT":
+                                    td = t.get("textData", {})
+                                    txt = td.get("text", "")
+                                    url = None
+                                    for d in td.get("decorations", []) or []:
+                                        if d.get("type") == "LINK":
+                                            url = d.get("linkData", {}).get("link", {}).get("url")
+                                    if url:
+                                        texts.append(f"<a href='{html.escape(url)}' target='_blank' rel='noopener'>{html.escape(txt or url)}</a>")
+                                    else:
+                                        texts.append(html.escape(txt))
+                            parts.append("<p>" + "".join(texts) + "</p>")
+                    return "".join(parts)
+                except Exception:
+                    # JSONとして扱えなければ通常処理へフォールバック
+                    pass
+            # 既にHTMLっぽいならそのまま
+            if "<" in s and ">" in s:
+                return s
+            # プレーンテキスト → エスケープ＆リンク化＆改行変換
+            s = html.escape(s)
+            s = _autolink(s)
+            return s.replace("\n", "<br>")
 
-    # 最低限の列にする
-    return df[["category","name","lambda","evidence","comment"]].dropna(subset=["name"]).reset_index(drop=True)
+        # コメント本文：commentが空ならdocument_rawを使う
+        base_text = df["comment"].astype(str)
+        needs_fallback = base_text.str.strip().eq("")
+        base_text = base_text.where(~needs_fallback, df["document_raw"])  # 空ならドキュメントで補完
+
+        # HTMLへ変換（以降、comment列はHTMLとして扱う）
+        df["comment"] = base_text.map(rich_to_html)
+
+        # 必須列の確保
+        for c in ["category","name","lambda","evidence","comment"]:
+            if c not in df.columns:
+                df[c] = ""
+
+        # 型整形
+        df["lambda"] = pd.to_numeric(df["lambda"], errors="coerce")
+        df["category"] = df["category"].astype(str)
+        df["name"] = df["name"].astype(str)
+        df["evidence"] = df["evidence"].astype(str)
+        df["comment"] = df["comment"].astype(str)
+
+        # 最低限の列にする
+        return df[["category","name","lambda","evidence","comment"]].dropna(subset=["name"]).reset_index(drop=True)
+        
+    except Exception as e:
+        st.error(f"データ読み込みエラー: {e}")
+        # エラーが発生した場合は空のDataFrameを返す
+        return pd.DataFrame(columns=["category","name","lambda","evidence","comment"])
 
 # ====== サイドバー：入力 ======
 st.sidebar.header("データと検索条件")
