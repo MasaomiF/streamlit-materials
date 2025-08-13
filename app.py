@@ -31,6 +31,20 @@ def load_materials(file_bytes: bytes | None) -> pd.DataFrame:
             df = pd.DataFrame(columns=["category","name","lambda"])  # 空の雛形
     # 列名を正規化
     df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
+    # 重複列名にも対応して、最初に有効な値を返すSeriesを取得
+    def pick_series(dframe: pd.DataFrame, names: list[str]):
+        for n in names:
+            if n in dframe.columns:
+                # 同名の重複列をすべて取得して左から優先
+                sub = dframe.loc[:, dframe.columns == n]
+                if isinstance(sub, pd.DataFrame):
+                    if sub.shape[1] == 1:
+                        return sub.iloc[:, 0]
+                    # 行方向で左→右に値を補完して先頭列を採用
+                    return sub.bfill(axis=1).iloc[:, 0]
+                else:
+                    return dframe[n]
+        return None
     # 同義列の吸収
     # lambda
     if "lambda" not in df.columns:
@@ -52,18 +66,16 @@ def load_materials(file_bytes: bytes | None) -> pd.DataFrame:
                 break
     # evidence (standarda)
     if "evidence" not in df.columns:
-        for alt in ["standarda", "standarda", "standard_a"]:
-            if alt in df.columns:
-                df["evidence"] = df[alt]
-                break
+        s = pick_series(df, ["standarda", "standard_a"])
+        if s is not None:
+            df["evidence"] = s
     if "evidence" not in df.columns:
         df["evidence"] = ""
     # comment
     if "comment" not in df.columns:
-        for alt in ["comment", "comments", "備考", "説明"]:
-            if alt in df.columns:
-                df["comment"] = df[alt]
-                break
+        s = pick_series(df, ["comment", "comments", "備考", "説明", "note", "コメント"])
+        if s is not None:
+            df["comment"] = s
     if "comment" not in df.columns:
         df["comment"] = ""
     # 必須列の確保
