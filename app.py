@@ -5,35 +5,20 @@ import html
 import re
 
 st.set_page_config(page_title="Materials Search", layout="wide")
-# ---- Top bar Back button (navigate then try to close window) ----
+# ---- Top bar Back link (no JS; works inside iframe via target="_top") ----
 st.markdown(
     """
     <style>
       .app-topbar{position:sticky; top:0; z-index:9999; background:#ffffffcc; backdrop-filter: blur(4px); padding:8px 0 6px; margin-bottom:4px; border-bottom:1px solid #eee;}
       .app-topbar__inner{display:flex; align-items:center; gap:8px;}
-      .app-topbar__btn{cursor:pointer; border:1px solid #dde1e7; padding:6px 10px; border-radius:6px; background:#fff; font-size:14px;}
+      .app-topbar__btn{display:inline-block; text-decoration:none; color:inherit; border:1px solid #dde1e7; padding:6px 10px; border-radius:6px; background:#fff; font-size:14px;}
       .app-topbar__btn:hover{background:#f6f7f9}
     </style>
     <div class="app-topbar">
       <div class="app-topbar__inner">
-        <button id="app-back-btn" class="app-topbar__btn">← Back</button>
+        <a class="app-topbar__btn" href="https://www.info-shop.info/applist" target="_top" rel="noopener">← Back</a>
       </div>
     </div>
-    <script>
-      (function(){
-        var url = "https://www.info-shop.info/applist";
-        var btn = document.getElementById('app-back-btn');
-        if(btn){
-          btn.addEventListener('click', function(e){
-            e.preventDefault();
-            try { (window.top || window).location.href = url; } catch(e) { window.location.href = url; }
-            // 画面遷移をキックした後、閉じられる環境ならウィンドウを閉じる
-            setTimeout(function(){ try { window.close(); } catch(e) {} }, 300);
-            return false;
-          });
-        }
-      })();
-    </script>
     """,
     unsafe_allow_html=True,
 )
