@@ -9,19 +9,46 @@ st.title("Materials Search（シンプル版）")
 @st.cache_data
 def load_materials(file_bytes: bytes | None) -> pd.DataFrame:
     if file_bytes:
-        df = pd.read_csv(io.BytesIO(file_bytes))
+        _buf = io.BytesIO(file_bytes)
+        for enc in (None, "utf-8", "utf-8-sig", "cp932", "shift_jis", "latin1"):
+            try:
+                _buf.seek(0)
+                df = pd.read_csv(_buf, encoding=enc) if enc else pd.read_csv(_buf)
+                break
+            except Exception:
+                df = None
+        if df is None:
+            df = pd.DataFrame(columns=["category","name","lambda"])  # フォールバック
     else:
-        try:
-            df = pd.read_csv("material_db.csv")
-        except Exception:
+        df = None
+        for enc in (None, "utf-8", "utf-8-sig", "cp932", "shift_jis", "latin1"):
+            try:
+                df = pd.read_csv("material_db.csv", encoding=enc) if enc else pd.read_csv("material_db.csv")
+                break
+            except Exception:
+                df = None
+        if df is None:
             df = pd.DataFrame(columns=["category","name","lambda"])  # 空の雛形
     # 列名を正規化
     df = df.rename(columns={c: str(c).strip().lower() for c in df.columns})
     # 同義列の吸収
+    # lambda
     if "lambda" not in df.columns:
-        for alt in ["λ","valuea","lambda(w/mk)"]:
+        for alt in ["λ", "valuea", "lambda(w/mk)", "lam", "thermal_conductivity"]:
             if alt in df.columns:
                 df["lambda"] = df[alt]
+                break
+    # name
+    if "name" not in df.columns:
+        for alt in ["material", "材料", "素材", "name_ja", "material_name", "品名", "名称"]:
+            if alt in df.columns:
+                df["name"] = df[alt]
+                break
+    # category
+    if "category" not in df.columns:
+        for alt in ["カテゴリ", "カテゴリー", "分類", "category_name", "group", "種別"]:
+            if alt in df.columns:
+                df["category"] = df[alt]
                 break
     # 必須列の確保
     for c in ["category","name","lambda"]:
