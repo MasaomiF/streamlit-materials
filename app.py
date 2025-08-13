@@ -74,9 +74,18 @@ sel_cat = st.sidebar.selectbox("カテゴリ", options=cat_options, index=0)
 
 kw = st.sidebar.text_input("材料名キーワード（部分一致）", value="")
 
+import math
 lam_min = float(materials["lambda"].min()) if not materials.empty else 0.0
-lam_max = float(materials["lambda"].max()) if not materials.empty else 1.0
-r = st.sidebar.slider("λ範囲 [W/mK]", min_value=0.0, max_value=max(1.0, lam_max), value=(lam_min, lam_max), step=0.01)
+lam_max_val = float(materials["lambda"].max()) if not materials.empty else 1.0
+lam_max_ceil = math.ceil(lam_max_val)
+
+r = st.sidebar.slider(
+    "λ範囲 [W/mK]",
+    min_value=0.0,
+    max_value=lam_max_ceil,
+    value=(max(0.0, min(lam_min, lam_max_ceil)), max(0.0, min(lam_max_val, lam_max_ceil))),
+    step=0.01
+)
 
 sort_col = st.sidebar.selectbox("並び替え列", ["name","category","lambda"], index=0)
 sort_asc = st.sidebar.checkbox("昇順", value=True)
