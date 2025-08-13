@@ -75,15 +75,38 @@ sel_cat = st.sidebar.selectbox("カテゴリ", options=cat_options, index=0)
 kw = st.sidebar.text_input("材料名キーワード（部分一致）", value="")
 
 import math
-lam_min = float(materials["lambda"].min()) if not materials.empty else 0.0
-lam_max_val = float(materials["lambda"].max()) if not materials.empty else 1.0
-lam_max_ceil = math.ceil(lam_max_val)
+
+# λ の min/max を安全に算出（NaN/±inf/空データ対応）
+lam_series = pd.to_numeric(materials["lambda"], errors="coerce") if not materials.empty else pd.Series(dtype=float)
+if lam_series.notna().any():
+    lam_min_raw = float(lam_series.min())
+    lam_max_raw = float(lam_series.max())
+else:
+    lam_min_raw, lam_max_raw = 0.0, 1.0
+
+# 数値が NaN/inf の場合のフォールバック
+lam_min = lam_min_raw if (lam_min_raw == lam_min_raw and math.isfinite(lam_min_raw)) else 0.0
+lam_max_val = lam_max_raw if (lam_max_raw == lam_max_raw and math.isfinite(lam_max_raw)) else 1.0
+
+# 物性として負値は想定しないためクリップ
+lam_min = max(0.0, lam_min)
+lam_max_val = max(0.01, lam_max_val)  # 上限が 0 にならないよう最小0.01
+
+# 万一 min > max の時は入れ替え
+if lam_min > lam_max_val:
+    lam_min, lam_max_val = lam_max_val, lam_min
+
+lam_max_ceil = int(math.ceil(lam_max_val))
+slider_max = float(max(1, lam_max_ceil))  # 最低でも1
+
+lo_default = float(max(0.0, min(lam_min, slider_max)))
+hi_default = float(max(lo_default, min(lam_max_val, slider_max)))
 
 r = st.sidebar.slider(
     "λ範囲 [W/mK]",
     min_value=0.0,
-    max_value=lam_max_ceil,
-    value=(max(0.0, min(lam_min, lam_max_ceil)), max(0.0, min(lam_max_val, lam_max_ceil))),
+    max_value=slider_max,
+    value=(lo_default, hi_default),
     step=0.01
 )
 
