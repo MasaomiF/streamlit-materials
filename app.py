@@ -1,6 +1,7 @@
 import io
 import pandas as pd
 import streamlit as st
+import html
 
 st.set_page_config(page_title="Materials Search", layout="wide")
 st.title("Materials Search（シンプル版）")
@@ -119,5 +120,41 @@ view = view.sort_values(by=sort_col, ascending=sort_asc, kind="mergesort").reset
 
 # ====== 結果表示 ======
 st.subheader("検索結果")
-st.caption("列：category / name / lambda (W/mK) / evidence / comment")
-st.dataframe(view[["category","name","lambda","evidence","comment"]], use_container_width=True, hide_index=True)
+st.caption("列：category / name / lambda (W/mK) / evidence / comment（※commentはリッチテキストを解釈して表示）")
+
+# ---- リッチテキスト対応のHTMLテーブル描画 ----
+# 安全のため、comment以外はHTMLエスケープし、commentはそのまま挿入して装飾を生かす
+cols = ["category","name","lambda","evidence","comment"]
+view_disp = view[cols] if all(c in view.columns for c in cols) else view
+
+# シンプルなスタイル
+table_css = """
+<style>
+.materials-table {width: 100%; border-collapse: collapse;}
+.materials-table th, .materials-table td {border: 1px solid #ddd; padding: 8px; vertical-align: top;}
+.materials-table th {background: #f6f6f6; position: sticky; top: 0; z-index: 1;}
+.materials-table td pre {margin: 0; white-space: pre-wrap;}
+.wrap {word-break: break-word;}
+</style>
+"""
+
+headers = ["category", "name", "lambda (W/mK)", "evidence", "comment"]
+rows_html = []
+for _, r in view_disp.iterrows():
+    cat = html.escape(str(r.get("category", "")))
+    name = html.escape(str(r.get("name", "")))
+    lam = r.get("lambda", "")
+    lam_str = "" if pd.isna(lam) else html.escape(f"{lam}")
+    evd = html.escape(str(r.get("evidence", "")))
+    # commentはリッチ（HTML）をそのまま差し込み／空なら空文字
+    cmt_raw = str(r.get("comment", ""))
+    cmt_cell = cmt_raw if cmt_raw.strip() else ""
+    rows_html.append(
+        f"<tr>\n<td class='wrap'>{cat}</td>\n<td class='wrap'>{name}</td>\n<td>{lam_str}</td>\n<td class='wrap'>{evd}</td>\n<td class='wrap'>{cmt_cell}</td>\n</tr>"
+    )
+
+table_html = table_css + "<table class='materials-table'>" \
+    + "<thead><tr>" + "".join(f"<th>{html.escape(h)}</th>" for h in headers) + "</tr></thead>" \
+    + "<tbody>" + "".join(rows_html) + "</tbody></table>"
+
+st.markdown(table_html, unsafe_allow_html=True)
