@@ -69,13 +69,11 @@ def load_materials(file_bytes: bytes | None) -> pd.DataFrame:
         if "evidence" not in df.columns:
             df["evidence"] = ""
 
-        # comment（優先: comment / comments / 備考 / 説明 / note / コメント）
-        if "comment" not in df.columns:
-            s = pick_series(df, ["comment", "comments", "備考", "説明", "note", "コメント"])
-            if s is not None:
-                df["comment"] = s
+        # comment は使用しないため空列（将来用に存在だけ確保）
         if "comment" not in df.columns:
             df["comment"] = ""
+        else:
+            df["comment"] = df["comment"].astype(str)
 
         # ドキュメント列（JSONリッチテキスト/HTML想定）を補助入力として扱う
         doc_series = pick_series(df, ["ドキュメント", "document", "doc"])
@@ -178,18 +176,20 @@ if sel_cat != "(すべて)":
     view = view[view["category"].astype(str) == str(sel_cat)]
 if kw.strip():
     s = kw.strip().lower()
-    view = view[view["name"].astype(str).str.lower().str.contains(s)]
+    name_hit = view["name"].astype(str).str.lower().str.contains(s, na=False)
+    cat_hit = view["category"].astype(str).str.lower().str.contains(s, na=False)
+    view = view[name_hit | cat_hit]
 
 # 並び替え
 view = view.sort_values(by=sort_col, ascending=sort_asc, kind="mergesort").reset_index(drop=True)
 
 # ====== 結果表示 ======
 st.subheader("検索結果")
-st.caption("列：category / name / lambda (W/mK) / evidence / comment（※commentはリッチテキストを解釈して表示）")
+st.caption("列：category / name / lambda (W/mK) / evidence")
 
 # ---- リッチテキスト対応のHTMLテーブル描画 ----
 # 安全のため、comment以外はHTMLエスケープし、commentはそのまま挿入して装飾を生かす
-cols = ["category","name","lambda","evidence","comment"]
+cols = ["category","name","lambda","evidence"]
 view_disp = view[cols] if all(c in view.columns for c in cols) else view
 
 # シンプルなスタイル
@@ -203,7 +203,7 @@ table_css = """
 </style>
 """
 
-headers = ["category", "name", "lambda (W/mK)", "evidence", "comment"]
+headers = ["category", "name", "lambda (W/mK)", "evidence"]
 rows_html = []
 for _, r in view_disp.iterrows():
     cat = html.escape(str(r.get("category", "")))
@@ -211,11 +211,8 @@ for _, r in view_disp.iterrows():
     lam = r.get("lambda", "")
     lam_str = "" if pd.isna(lam) else html.escape(f"{lam}")
     evd = html.escape(str(r.get("evidence", "")))
-    # commentはリッチ（HTML）をそのまま差し込み／空なら空文字
-    cmt_html = str(r.get("comment", ""))  # ここは既にHTML
-    cmt_cell = cmt_html if cmt_html.strip() else ""
     rows_html.append(
-        f"<tr>\n<td class='wrap'>{cat}</td>\n<td class='wrap'>{name}</td>\n<td>{lam_str}</td>\n<td class='wrap'>{evd}</td>\n<td class='wrap'>{cmt_cell}</td>\n</tr>"
+        f"<tr>\n<td class='wrap'>{cat}</td>\n<td class='wrap'>{name}</td>\n<td>{lam_str}</td>\n<td class='wrap'>{evd}</td>\n</tr>"
     )
 
 table_html = table_css + "<table class='materials-table'>" \
