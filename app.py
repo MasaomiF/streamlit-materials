@@ -5,7 +5,7 @@ import html
 import re
 
 st.set_page_config(page_title="Materials Search", layout="wide")
-st.title("Materials Search（シンプル版）")
+st.title("Materials Search（Ver1.0）")
 
 # ====== データ読み込み ======
 @st.cache_data
